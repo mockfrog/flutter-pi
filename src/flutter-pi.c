@@ -141,6 +141,7 @@ struct {
 } flutter = {0};
 
 glob_t					   input_devices_glob;
+int mode_id = -1;
 size_t                     n_input_devices;
 struct input_device       *input_devices;
 struct mousepointer_mtslot mousepointer;
@@ -699,37 +700,44 @@ bool init_display(void) {
 		fprintf(stderr, "could not find a connected connector!\n");
 		return false;
 	}
+	if (mode_id >= 0 && mode_id < connector->count_modes) {
+		drmModeModeInfo *current_mode = &connector->modes[mode_id];
+		drm.mode = current_mode;
+		width = current_mode->hdisplay;
+		height = current_mode->vdisplay;
+		refresh_rate = current_mode->vrefresh;
+	} else {
+		printf("Choosing DRM mode from %d available modes...\n", connector->count_modes);
+		bool found_preferred = false;
+		for (i = 0, area = 0; i < connector->count_modes; i++) {
+			drmModeModeInfo *current_mode = &connector->modes[i];
 
-	printf("Choosing DRM mode from %d available modes...\n", connector->count_modes);
-	bool found_preferred = false;
-	for (i = 0, area = 0; i < connector->count_modes; i++) {
-		drmModeModeInfo *current_mode = &connector->modes[i];
+			printf("  modes[%d]: name: \"%s\", %ux%u%s, %uHz, type: %u, flags: %u\n",
+				   i, current_mode->name, current_mode->hdisplay, current_mode->vdisplay,
+				   (current_mode->flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "p",
+				   current_mode->vrefresh, current_mode->type, current_mode->flags
+			);
 
-		printf("  modes[%d]: name: \"%s\", %ux%u%s, %uHz, type: %u, flags: %u\n",
-			   i, current_mode->name, current_mode->hdisplay, current_mode->vdisplay,
-			   (current_mode->flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "p",
-			   current_mode->vrefresh, current_mode->type, current_mode->flags
-		);
+			if (found_preferred) continue;
 
-		if (found_preferred) continue;
+			// we choose the highest resolution with the highest refresh rate, preferably non-interlaced (= progressive) here.
+			int current_area = current_mode->hdisplay * current_mode->vdisplay;
+			if (( current_area  > area) ||
+				((current_area == area) && (current_mode->vrefresh >  refresh_rate)) || 
+				((current_area == area) && (current_mode->vrefresh == refresh_rate) && ((current_mode->flags & DRM_MODE_FLAG_INTERLACE) == 0)) ||
+				( current_mode->type & DRM_MODE_TYPE_PREFERRED)) {
 
-		// we choose the highest resolution with the highest refresh rate, preferably non-interlaced (= progressive) here.
-		int current_area = current_mode->hdisplay * current_mode->vdisplay;
-		if (( current_area  > area) ||
-			((current_area == area) && (current_mode->vrefresh >  refresh_rate)) || 
-			((current_area == area) && (current_mode->vrefresh == refresh_rate) && ((current_mode->flags & DRM_MODE_FLAG_INTERLACE) == 0)) ||
-			( current_mode->type & DRM_MODE_TYPE_PREFERRED)) {
+				drm.mode = current_mode;
+				width = current_mode->hdisplay;
+				height = current_mode->vdisplay;
+				refresh_rate = current_mode->vrefresh;
+				area = current_area;
 
-			drm.mode = current_mode;
-			width = current_mode->hdisplay;
-			height = current_mode->vdisplay;
-			refresh_rate = current_mode->vrefresh;
-			area = current_area;
-
-			// if the preferred DRM mode is bogus, we're screwed.
-			if (current_mode->type & DRM_MODE_TYPE_PREFERRED) {
-				printf("    this mode is preferred by DRM. (DRM_MODE_TYPE_PREFERRED)\n");
-				found_preferred = true;
+				// if the preferred DRM mode is bogus, we're screwed.
+				if (current_mode->type & DRM_MODE_TYPE_PREFERRED) {
+					printf("    this mode is preferred by DRM. (DRM_MODE_TYPE_PREFERRED)\n");
+					found_preferred = true;
+				}
 			}
 		}
 	}
@@ -1466,7 +1474,7 @@ bool  parse_cmd_args(int argc, char **argv) {
 	int ok, opt, index = 0;
 	input_devices_glob = (glob_t) {0};
 
-	while ((opt = getopt(argc, (char *const *) argv, "+i:h")) != -1) {
+	while ((opt = getopt(argc, (char *const *) argv, "+i:m:h")) != -1) {
 		index++;
 		switch(opt) {
 			case 'i':
@@ -1474,7 +1482,12 @@ bool  parse_cmd_args(int argc, char **argv) {
 				glob(optarg, GLOB_BRACE | GLOB_TILDE | (input_specified ? GLOB_APPEND : 0), NULL, &input_devices_glob);
 				index++;
 				break;
+			case 'm':
+				mode_id = atoi(optarg);
+				index++;
+				break;
 			case 'h':
+
 			default:
 				printf("%s", usage);
 				return false;
