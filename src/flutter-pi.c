@@ -1401,6 +1401,9 @@ void *io_loop(void *userdata) {
 				} else if (device->is_direct) {
 					slots = device->mtslots;
 					n_slots = device->n_mtslots;
+				} else {
+					slots = active_mtslot;
+					n_slots = 1;
 				}
 
 				for (j = 0; j < n_slots; j++) {
